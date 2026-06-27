@@ -79,8 +79,6 @@ Object.defineProperty(globalThis, 'psomium', {
         onclick="psomium.send('sqlite', 'execute', {ms:1000}).then(res=>alert(res)).catch(err=>alert('err'))">TEST1</button>
     <button
         onclick="psomium.send('sqlite', 'execute', {ms: 3000}).then(res=>alert(res)).catch(err=>alert('err'))">TEST3</button>
-    <hr>
-    <a href="/a">exit</a>
 </body>
 </html>
 "@
@@ -105,13 +103,14 @@ Set-Alias -Name await -Value Wait-Task -Force
 
 $port = 8000
 
-while($true) {
+while ($true) {
     try {
         $url = "http://localhost:${port}/"
         $listener = [System.Net.HttpListener]::new()
         $listener.Prefixes.Add($url)
         $listener.Start()
-    } catch {
+    }
+    catch {
         $port = $port + 1
         continue
     }
@@ -119,30 +118,39 @@ while($true) {
     break
 }
 
-Start-Process "msedge.exe" -ArgumentList "--app=http://localhost:${port}/"
+try {
+    Start-Process "chromium" -ArgumentList "--app=http://localhost:${port}/"
+}
+catch {
+    try {
+        Start-Process "chrome" -ArgumentList "--app=http://localhost:${port}/"
+    }
+    catch {
+        Start-Process "msedge" -ArgumentList "--app=http://localhost:${port}/"
+    }
+}
 
-while ($listener.IsListening)
-{
+while ($listener.IsListening) {
 
     $context = await $listener.GetContextAsync()
     $requestUrl = $context.Request.Url
     $response = $context.Response
     
     Write-Host ''
-    if ($context.Request.IsWebSocketRequest)
-    {    
+    if ($context.Request.IsWebSocketRequest) {    
         Write-Host "> $requestUrl ws"
+
         $webSocketContext = await $context.AcceptWebSocketAsync(([NullString]::Value))
         $webSocket = $webSocketContext.WebSocket
 
-        $buffer = New-Object byte[] 1024
+        $receiveBuffer = [byte[]]::new(1024)
+        $inArraySegment = [System.ArraySegment[Byte]]$receiveBuffer
 
-        while ($webSocket.State -eq [System.Net.WebSockets.WebSocketState]::Open)
-        {
-            $result = await $webSocket.ReceiveAsync($buffer, [System.Threading.CancellationToken]::None)
+        while ($webSocket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+            $result = await $webSocket.ReceiveAsync($inArraySegment, [System.Threading.CancellationToken]::None)
 
             if ($result.MessageType -ne [System.Net.WebSockets.WebSocketMessageType]::Close) {
-                $message = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                $message = [System.Text.Encoding]::UTF8.GetString($inArraySegment, 0, $result.Count)
 
                 $json = $message | ConvertFrom-Json
 
@@ -152,13 +160,17 @@ while ($listener.IsListening)
                 $out = $json | ConvertTo-Json
                 Start-Sleep -Milliseconds $json.ms
 
+                $messageBuffer = [System.Text.Encoding]::UTF8.GetBytes($out)
+                $outArraySegment = [System.ArraySegment[byte]]::new($messageBuffer)
+
                 $task = await $webSocket.SendAsync(
-                    [System.Text.Encoding]::UTF8.GetBytes($out), 
+                    $outArraySegment,
                     [System.Net.WebSockets.WebSocketMessageType]::Text, 
                     $true, 
                     [System.Threading.CancellationToken]::None
                 )
-            } else {
+            }
+            else {
                 Write-Host "Close Connection"
                 $task = $webSocket.CloseAsync(
                     [System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
@@ -170,7 +182,8 @@ while ($listener.IsListening)
         }
         $listener.close()
         exit 0
-    } else {
+    }
+    else {
     
         Write-Host "> $requestUrl http"
 
